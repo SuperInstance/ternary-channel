@@ -1,0 +1,6 @@
+[package]
+name = "ternary-channel"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Communication channel abstractions for inter-room messaging in ternary fleets"
