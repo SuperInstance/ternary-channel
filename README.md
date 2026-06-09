@@ -1,87 +1,98 @@
 # ternary-channel
 
-**Communication channel abstractions for inter-room messaging in the SuperInstance ternary ecosystem.**
+**Communication channel abstractions for inter-room messaging**
 
-## Background
+[![ternary](https://img.shields.io/badge/ecosystem-ternary-blue)](https://github.com/orgs/SuperInstance/repositories?q=ternary)
+[![tests](https://img.shields.io/badge/tests-25-green)]()
 
-In distributed systems, the communication substrate determines everything else — fault tolerance, throughput, ordering guarantees, and latency characteristics. Traditional message-passing systems (like Erlang/OTP actors, Go channels, or MPI) use binary channel states: a message is either sent or not sent, a channel is open or closed. The SuperInstance ecosystem introduces a **ternary paradigm** where every signal carries three possible semantic values — negative (−1), neutral (0), or positive (+1) — enabling richer communication semantics than binary on/off.
+## Overview
 
-`ternary-channel` provides the comms backbone connecting "rooms" in a ternary fleet. It offers five channel types, each with bounded capacity, clean lifecycle management, and ternary priority semantics for message ordering.
+Communication channel abstractions for inter-room messaging.
 
-## How It Works
+Provides the comms backbone connecting rooms in a ternary fleet:
+direct channels, broadcast, priority ordering, reliable delivery with
+acknowledgment and retry, and multiplexing many logical channels over
+one connection.
 
-### Core Abstractions
+## Architecture
 
-The crate defines a `Channel` trait as the universal interface:
+- **`Message`** — core data structure
+- **`DirectChannel`** — core data structure
+- **`BroadcastChannel`** — core data structure
+- **`PriorityChannel`** — core data structure
+- **`ReliableChannel`** — core data structure
+- **`ChannelMux`** — core data structure
+- **`TernaryPriority`** — state enumeration
+- **`ChannelState`** — state enumeration
+- **`DeliveryStatus`** — state enumeration
 
-- **`send(msg) → Result`** — enqueue a message
-- **`receive() → Option<Message>`** — dequeue (non-blocking)
-- **`close()`** — terminate the channel
-- **`is_open() → bool`** — check liveness
-- **`pending_count() → usize`** — queue depth
+### Traits
 
-Every message carries a `TernaryPriority`: `Negative`, `Neutral`, or `Positive`, mapped to −1, 0, and +1 respectively. This priority drives ordering in priority-aware channel types.
+- **`Channel`** — shared behavior contract
 
-### Channel Types
+### Key Functions
 
-| Channel | Purpose | Ordering |
-|---------|---------|----------|
-| `DirectChannel` | Point-to-point between two endpoints | FIFO |
-| `BroadcastChannel` | One-to-many with pub/sub semantics | FIFO, fan-out |
-| `PriorityChannel` | Ternary-priority-ordered delivery | Positive → Neutral → Negative |
-| `ReliableChannel` | ACK-based delivery with retries | FIFO + tracking |
-| `ChannelMux` | Multiplex many logical channels over one connection | Per-sub-channel FIFO |
+- `new()`
+- `new()`
+- `name()`
+- `new()`
+- `name()`
+- `subscribe()`
+- `unsubscribe()`
+- `subscriber_count()`
+- `subscribers()`
+- `new()`
+- ... and 19 more
 
-### Reliable Delivery
+## Why Ternary?
 
-`ReliableChannel` implements acknowledgment tracking: every sent message has a `DeliveryStatus` (Pending → Acknowledged or Failed). The `retry_pending()` method advances retry counters, and `clean_outbox()` prunes completed messages. This mirrors patterns from TCP retransmission and MQTT QoS 2.
+The balanced ternary system {-1, 0, +1} (also known as Z₃) is the mathematically optimal discrete encoding:
+- **More expressive than binary**: three states capture positive, neutral, and negative
+- **Natural for decisions**: accept/reject/abstain, buy/hold/sell, agree/disagree/neutral
+- **Self-balancing**: the 0 state acts as a universal screen, preventing pathological lock-in
+- **Z₃ cyclic dynamics**: rock-paper-scissors is the only natural coordination mechanism
 
-### Multiplexing
+## Stats
 
-`ChannelMux` multiplexes named `DirectChannel` instances over a single connection, supporting `send_on(channel_name, msg)`, `receive_from(channel_name)`, and `receive_any()` for round-robin dispatch. This is structurally similar to HTTP/2 stream multiplexing or SSH channel multiplexing.
+| Metric | Value |
+|--------|-------|
+| Lines of Rust | 741 |
+| Test count | 25 |
+| Public types | 9 |
+| Public functions | 29 |
 
-## Experimental Results
+## Ecosystem
 
-The crate includes comprehensive test coverage (30+ unit tests) validating:
+This crate is part of the **[SuperInstance Ternary Fleet](https://github.com/orgs/SuperInstance/repositories?q=ternary)**:
 
-- **FIFO ordering** in direct and broadcast channels
-- **Priority dequeue** always drains positive-priority messages before neutral, and neutral before negative
-- **Capacity enforcement** — bounded buffers reject overflow
-- **Close semantics** — closed channels reject sends, existing messages remain receivable
-- **Retry lifecycle** — messages transition from Pending → Acknowledged (on `ack()`) or Pending → Failed (after max retries)
-- **Mux isolation** — sub-channels operate independently within the multiplexer
+- **[ternary-core](https://github.com/SuperInstance/ternary-core)** — shared traits and Z₃ arithmetic
+- **[ternary-grid](https://github.com/SuperInstance/ternary-grid)** — spatial grid with {-1, 0, +1} cells
+- **[ternary-graph](https://github.com/SuperInstance/ternary-graph)** — ternary-weighted graph algorithms
+- **[ternary-automata](https://github.com/SuperInstance/ternary-automata)** — three-state cellular automata
+- **[ternary-compiler](https://github.com/SuperInstance/ternary-compiler)** — expression compiler and optimizer
 
-## Impact
+200+ crates. 4,300+ tests. One pattern.
 
-`ternary-channel` serves as the foundational transport layer for the SuperInstance ecosystem. By embedding ternary priority directly into the messaging substrate, higher-level protocols (consensus, voting, game theory) can leverage priority-aware routing without additional infrastructure. The design follows the Unix philosophy: simple primitives that compose into powerful systems.
+## Research Context
 
-The multiplexer pattern enables efficient resource usage in fleet deployments where many logical conversations share a single network connection, while the reliable channel provides the building blocks for exactly-once delivery semantics.
+The ternary approach connects to several active research areas:
+- **Ternary Neural Networks** (TNNs): weights constrained to {-1, 0, +1} for efficient inference
+- **Huawei's ternary chip**: 7nm ternary silicon with 60% less power consumption
+- **Active inference**: free energy minimization naturally maps to ternary action selection
+- **Cyclic dominance**: RPS dynamics maintain biodiversity in spatial ecology
+- **Z₃ group theory**: the only algebraic group on three elements is cyclic addition mod 3
 
-## Use Cases
+## Usage
 
-1. **Inter-room task dispatch** — A fleet coordinator sends high-priority (Positive) task assignments to worker rooms, while low-priority telemetry (Negative) is queued behind urgent messages. `PriorityChannel` ensures critical commands are never blocked by bulk data.
+```toml
+[dependencies]
+ternary-channel = "0.1.0"
+```
 
-2. **Reliable command delivery** — Control messages between agents use `ReliableChannel` for acknowledgment tracking and automatic retry. Failed deliveries surface as `DeliveryStatus::Failed` for upstream error handling, similar to MQTT's QoS guarantees.
+```rust
+use ternary_channel;
+```
 
-3. **Multi-protocol multiplexing** — A single TCP connection between two fleet nodes carries command traffic, event notifications, and heartbeat signals on separate logical channels via `ChannelMux`, avoiding head-of-line blocking between traffic classes.
+## License
 
-4. **Broadcast coordination** — `BroadcastChannel` distributes configuration updates to all subscribed rooms simultaneously, with subscriber management (subscribe/unsubscribe) for dynamic fleet membership.
-
-5. **Telemetry aggregation** — Low-priority metric reports flow through `DirectChannel` instances from leaf rooms to a central collector, respecting capacity limits to prevent backpressure from overwhelming the collector.
-
-## Open Questions
-
-- **Backpressure propagation:** The current bounded-buffer approach rejects messages at capacity. Should a future version support backpressure signals (e.g., `await_capacity()`) for flow control, similar to reactive streams?
-- **Asynchronous I/O:** The current design is synchronous (non-blocking `receive`). Integration with `tokio` or `async-std` would enable async `send`/`receive` for high-concurrency fleet deployments. What's the right abstraction boundary?
-- **Persistence:** Channels are in-memory only. For fleet survivability across node restarts, should channel state be persistable (WAL, shared memory)?
-
-## Connection to Oxide Stack
-
-`ternary-channel` is the transport backbone of the SuperInstance ternary ecosystem. It is consumed by:
-
-- **`ternary-event`** — event bus uses channels internally for dispatch
-- **`ternary-command`** — command dispatch uses reliable channels for ACK-based command delivery
-- **`ternary-protocol`** — wire protocol defines serialization for channel messages
-- **`ternary-voting`** — consensus rounds use priority channels for vote collection
-
-The channel abstractions follow the same philosophical pattern as Rust's `std::sync::mpsc` and Go's channel model, but with ternary priority semantics woven into the core trait — a design choice that propagates through the entire ecosystem.
+MIT
