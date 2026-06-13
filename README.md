@@ -1,97 +1,148 @@
-# ternary-channel
+# Ternary Channel
 
-**Communication channel abstractions for inter-room messaging**
+**Ternary Channel** provides communication abstractions for inter-room messaging — direct channels, broadcast, priority-ordered delivery, reliable transport with acknowledgment and retry, and multiplexing many logical channels over one connection.
 
-[![ternary](https://img.shields.io/badge/ecosystem-ternary-blue)](https://github.com/orgs/SuperInstance/repositories?q=ternary)
-[![tests](https://img.shields.io/badge/tests-25-green)]()
+## Why It Matters
 
-## Overview
+Reliable communication between distributed rooms requires more than TCP: messages need priorities (urgent vs. normal), multiplexing (multiple logical streams over one connection), and reliability guarantees (at-least-once delivery with retry). Ternary Channel provides these with ternary priority levels {-1 (low), 0 (normal), +1 (high)}, enabling precedence-based message ordering that integrates with the ternary ecosystem.
 
-Communication channel abstractions for inter-room messaging.
+## How It Works
 
-Provides the comms backbone connecting rooms in a ternary fleet:
-direct channels, broadcast, priority ordering, reliable delivery with
-acknowledgment and retry, and multiplexing many logical channels over
-one connection.
-
-## Architecture
-
-- **`Message`** — core data structure
-- **`DirectChannel`** — core data structure
-- **`BroadcastChannel`** — core data structure
-- **`PriorityChannel`** — core data structure
-- **`ReliableChannel`** — core data structure
-- **`ChannelMux`** — core data structure
-- **`TernaryPriority`** — state enumeration
-- **`ChannelState`** — state enumeration
-- **`DeliveryStatus`** — state enumeration
-
-### Traits
-
-- **`Channel`** — shared behavior contract
-
-### Key Functions
-
-- `new()`
-- `new()`
-- `name()`
-- `new()`
-- `name()`
-- `subscribe()`
-- `unsubscribe()`
-- `subscriber_count()`
-- `subscribers()`
-- `new()`
-- ... and 19 more
-
-## Why Ternary?
-
-The balanced ternary system {-1, 0, +1} (also known as Z₃) is the mathematically optimal discrete encoding:
-- **More expressive than binary**: three states capture positive, neutral, and negative
-- **Natural for decisions**: accept/reject/abstain, buy/hold/sell, agree/disagree/neutral
-- **Self-balancing**: the 0 state acts as a universal screen, preventing pathological lock-in
-- **Z₃ cyclic dynamics**: rock-paper-scissors is the only natural coordination mechanism
-
-## Stats
-
-| Metric | Value |
-|--------|-------|
-| Lines of Rust | 741 |
-| Test count | 25 |
-| Public types | 9 |
-| Public functions | 29 |
-
-## Ecosystem
-
-This crate is part of the **[SuperInstance Ternary Fleet](https://github.com/orgs/SuperInstance/repositories?q=ternary)**:
-
-- **[ternary-core](https://github.com/SuperInstance/ternary-core)** — shared traits and Z₃ arithmetic
-- **[ternary-grid](https://github.com/SuperInstance/ternary-grid)** — spatial grid with {-1, 0, +1} cells
-- **[ternary-graph](https://github.com/SuperInstance/ternary-graph)** — ternary-weighted graph algorithms
-- **[ternary-automata](https://github.com/SuperInstance/ternary-automata)** — three-state cellular automata
-- **[ternary-compiler](https://github.com/SuperInstance/ternary-compiler)** — expression compiler and optimizer
-
-200+ crates. 4,300+ tests. One pattern.
-
-## Research Context
-
-The ternary approach connects to several active research areas:
-- **Ternary Neural Networks** (TNNs): weights constrained to {-1, 0, +1} for efficient inference
-- **Huawei's ternary chip**: 7nm ternary silicon with 60% less power consumption
-- **Active inference**: free energy minimization naturally maps to ternary action selection
-- **Cyclic dominance**: RPS dynamics maintain biodiversity in spatial ecology
-- **Z₃ group theory**: the only algebraic group on three elements is cyclic addition mod 3
-
-## Usage
-
-```toml
-[dependencies]
-ternary-channel = "0.1.0"
-```
+### Channel Trait
 
 ```rust
-use ternary_channel;
+trait Channel {
+    fn send(&mut self, msg: Message) -> Result<(), &'static str>;
+    fn try_recv(&mut self) -> Option<Message>;
+    fn close(&mut self);
+    fn state(&self) -> ChannelState;
+}
 ```
+
+All implementations follow this trait. Send: **O(1)** amortized. Recv: **O(1)**.
+
+### Message Priority
+
+```rust
+enum TernaryPriority {
+    Negative = -1,  // Low priority, background tasks
+    Neutral = 0,    // Normal priority, default
+    Positive = 1,   // High priority, urgent alerts
+}
+```
+
+Priority queue orders messages: Positive before Neutral before Negative. Within same priority: FIFO.
+
+### Direct Channel
+
+Point-to-point channel with bounded buffer:
+
+```
+DirectChannel {
+    buffer: VecDeque<Message>,  // capacity-bounded
+    state: Open | Closed,
+}
+
+send(msg):
+    if buffer full: return Err("channel full")
+    insert by priority: O(N) for sorted insert, O(1) for unsorted append
+```
+
+### Broadcast Channel
+
+One sender, many receivers:
+
+```
+BroadcastChannel {
+    receivers: Vec<Receiver>,
+}
+
+send(msg):
+    for rx in receivers: rx.enqueue(msg.clone())
+```
+
+Broadcast: **O(N)** for N receivers. Each receiver has independent bounded queue.
+
+### Reliable Channel
+
+Wraps any channel with acknowledgment and retry:
+
+```
+ReliableChannel<C: Channel> {
+    inner: C,
+    pending: HashMap<msg_id, (Message, retry_count, last_sent)>,
+    ack_timeout: Duration,
+    max_retries: usize,
+}
+
+send(msg):
+    inner.send(msg)
+    pending.insert(msg.id, (msg, 0, now))
+
+on_ack(msg_id):
+    pending.remove(msg_id)
+
+retry_loop():
+    for (id, (msg, count, last)) in pending:
+        if now - last > ack_timeout:
+            if count >= max_retries: return Err
+            inner.send(msg)
+            count += 1
+            last = now
+```
+
+Retry: **O(P)** for P pending messages per timeout interval.
+
+### Multiplexer
+
+```
+Mux {
+    channels: HashMap<channel_id, Box<dyn Channel>>,
+}
+
+send(channel_id, msg) → channels[channel_id].send(msg)
+```
+
+Routing: **O(1)** HashMap lookup. Enables many virtual streams over one transport.
+
+## Quick Start
+
+```rust
+use ternary_channel::{DirectChannel, Message, TernaryPriority, Channel};
+
+let mut tx = DirectChannel::new(256);
+let mut rx = tx.clone_for_receive();
+
+tx.send(Message::new(1, "room-a", "room-b", vec![0x42], TernaryPriority::Positive)).unwrap();
+
+if let Some(msg) = rx.try_recv() {
+    println!("Priority: {:?}, payload: {:?}", msg.priority, msg.payload);
+}
+```
+
+## API
+
+| Type | Description |
+|------|-------------|
+| `Channel` | Core trait: `send`, `try_recv`, `close`, `state` |
+| `DirectChannel` | Point-to-point bounded buffer |
+| `BroadcastChannel` | Fan-out to multiple receivers |
+| `ReliableChannel<C>` | Acknowledgment and retry wrapper |
+| `Mux` | Multiplexer for virtual channels |
+| `Message` | id, sender, recipient, payload, priority |
+| `TernaryPriority` | Negative (-1), Neutral (0), Positive (+1) |
+
+## Architecture Notes
+
+Ternary Channel provides the communication primitives for inter-room messaging in SuperInstance. In γ + η = C, Positive (+1) priority messages drive γ (growth — urgent coordination for expansion), Negative (-1) priority messages carry η (avoidance — background failure reports and cleanup), and the multiplexer ensures both coexist without blocking. Integrates with `ternary-bus` for pub/sub and `superinstance-protocol` for wire format.
+
+See [ARCHITECTURE.md](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md) for communication architecture.
+
+## References
+
+1. Hoare, C. A. R. (1978). "Communicating Sequential Processes." *Communications of the ACM*, 21(8), 666–677.
+2. Tanenbaum, A. S. & Van Steen, M. (2017). *Distributed Systems*, 3rd ed. Pearson.
+3. Tokio Documentation (2024). "Asynchronous Channels in Rust."
 
 ## License
 
